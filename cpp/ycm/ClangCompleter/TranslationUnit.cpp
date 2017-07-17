@@ -266,34 +266,48 @@ std::string TranslationUnit::GetTypeAtLocation(
   std::string type_description =
     CXStringToString( clang_getTypeSpelling( type ) );
 
-  if ( type_description.empty() )
-    return "Unknown type";
+  if ( type_description.empty() ) {
+    type_description = "Unknown type";
+  } else {
+    // We have a choice here; libClang provides clang_getCanonicalType which will
+    // return the "underlying" type for the type returned by clang_getCursorType
+    // e.g. for a typedef
+    //     type = clang_getCanonicalType( type );
+    //
+    // Without the above, something like the following would return "MyType"
+    // rather than int:
+    //     typedef int MyType;
+    //     MyType i = 100; <-- type = MyType, canonical type = int
+    //
+    // There is probably more semantic value in calling it MyType. Indeed, if we
+    // opt for the more specific type, we can get very long or
+    // confusing STL types even for simple usage. e.g. the following:
+    //     std::string test = "test"; <-- type = std::string;
+    //                                    canonical type = std::basic_string<char>
+    //
+    // So as a compromise, we return both if and only if the types differ, like
+    //     std::string => std::basic_string<char>
 
-  // We have a choice here; libClang provides clang_getCanonicalType which will
-  // return the "underlying" type for the type returned by clang_getCursorType
-  // e.g. for a typedef
-  //     type = clang_getCanonicalType( type );
-  //
-  // Without the above, something like the following would return "MyType"
-  // rather than int:
-  //     typedef int MyType;
-  //     MyType i = 100; <-- type = MyType, canonical type = int
-  //
-  // There is probably more semantic value in calling it MyType. Indeed, if we
-  // opt for the more specific type, we can get very long or
-  // confusing STL types even for simple usage. e.g. the following:
-  //     std::string test = "test"; <-- type = std::string;
-  //                                    canonical type = std::basic_string<char>
-  //
-  // So as a compromise, we return both if and only if the types differ, like
-  //     std::string => std::basic_string<char>
+    CXType canonical_type = clang_getCanonicalType( type );
 
-  CXType canonical_type = clang_getCanonicalType( type );
+    if ( type_description != CXStringToString( clang_getTypeSpelling( canonical_type ) ) ) {
+      type_description += " => ";
+      type_description += CXStringToString(
+                            clang_getTypeSpelling( canonical_type ) );
+    }
+  }
 
-  if ( !clang_equalTypes( type, canonical_type ) ) {
-    type_description += " => ";
-    type_description += CXStringToString(
-                          clang_getTypeSpelling( canonical_type ) );
+  long long size = clang_Type_getSizeOf( type );
+
+  if ( size >= 0 ) {
+    type_description += " (size: " + std::to_string(size) + " B";
+
+    long long align = clang_Type_getAlignOf( type );
+
+    if ( align >= 0 )
+      type_description += ", align: " + std::to_string(align) + " B";
+
+    type_description += ")";
   }
 
   return type_description;
